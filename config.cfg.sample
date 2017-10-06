@@ -1,0 +1,14 @@
+[github]
+token = YOUR_SECRET_TOKEN
+
+[labels]
+Bug = FF0000
+Last year = 23FB89
+
+[others]
+template-repo = MarekSuchanek/myLabels
+
+[repos]
+MarekSuchanek/repo1 = on
+MarekSuchanek/repo2 = on
+CVUT/MI-PYT = off

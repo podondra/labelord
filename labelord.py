@@ -19,22 +19,13 @@ def github_get(session, resource, endpoint='https://api.github.com'):
 
 def github_error(response):
     click.echo('GitHub: ERROR {} - {}'.format(response.status_code,
-               response.json()['message']))
+               response.json()['message']), err=True)
     if response.status_code == requests.codes.unauthorized:
         sys.exit(4)
     elif response.status_code == requests.codes.not_found:
         sys.exit(5)
     else:
         sys.exit(10)
-
-
-def next_github_url(response):
-    link = response.headers.get('link', None)
-    if link:
-        match = re.search('<(.*)>; rel="next"', link)
-        if match:
-            return match.group(1)
-    return None
 
 
 def get_github_resource(session, resource):
@@ -48,11 +39,21 @@ def get_github_resource(session, resource):
 
         return_list += response.json()
 
-        url = next_github_url(response)
-        if url is None:
+        try:
+            url = response.links['next']['url']
+        except KeyError:
             break
         response = session.get(url)
     return return_list
+
+
+def get_token(token, cfg):
+    try:
+        token = token if token else cfg['github']['token']
+    except KeyError:
+        click.echo('No GitHub token has been provided', err=True)
+        sys.exit(3)
+    return token
 
 
 @click.group('labelord')
@@ -66,23 +67,19 @@ def cli(ctx, config, token):
     ctx.obj = ctx.obj if ctx.obj else {}
 
     # use this session for communication with GitHub
-    sess = ctx.obj.get('session', requests.Session())
-    # save session in context
-    # if the session already exists reassign the same session
-    ctx.obj['session'] = sess
+    session = ctx.obj.get('session', requests.Session())
+    ctx.obj['session'] = session
 
+    # parse config
     cfg = configparser.ConfigParser()
+    # make option names case sensitive
+    cfg.optionxform = str
     # if config file does not exist 'cfg' will be empty
     cfg.read(config)
+    ctx.obj['config'] = cfg
 
-    try:
-        the_token = token if token else cfg['github']['token']
-    except KeyError:
-        click.echo('No GitHub token has been provided')
-        sys.exit(3)
-
-    sess.headers = {'User-Agent': 'Python'}
-    sess.auth = functools.partial(token_auth, token=the_token)
+    session.headers = {'User-Agent': 'Python'}
+    session.auth = functools.partial(token_auth, token=get_token(token, cfg))
 
 
 @cli.command(help='List all accessible GitHub repositories.')
@@ -120,10 +117,20 @@ def list_labels(ctx, reposlug):
 @click.option('-q', '--quiet', is_flag=True, default=False,
               help='Do not write anything to stdout or stderr.')
 @click.pass_context
-def run(ctx, mode, dry_run, verbose, quiet, template_repo):
-    # TODO: add required options/arguments
+def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     # TODO: implement the 'run' command
-    ...
+
+    cfg = ctx.obj['config']
+    # check labels specification
+    if template_repo is None and 'labels' not in cfg.sections() and \
+            cfg.get('others', 'template_repo', fallback=None) is None:
+        click.echo('No labels specification has been found', err=True)
+        sys.exit(6)
+
+    # check repositories specification
+    if all_repos == False and 'repos' not in cfg.sections():
+        click.echo('No repositories specification has been found', err=True)
+        sys.exit(7)
 
 
 if __name__ == '__main__':

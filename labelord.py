@@ -4,6 +4,7 @@ import functools
 import click
 import requests
 import configparser
+from urllib.parse import urljoin
 
 
 def token_auth(req, token):
@@ -11,21 +12,64 @@ def token_auth(req, token):
     return req
 
 
+def github_get(session, resource, endpoint='https://api.github.com'):
+    url = urljoin(endpoint, resource)
+    return session.get(url, params={'per_page': 100, 'page': 1})
+
+
+def github_error(response):
+    click.echo('GitHub: ERROR {} - {}'.format(response.status_code,
+               response.json()['message']))
+    if response.status_code == requests.codes.unauthorized:
+        sys.exit(4)
+    elif response.status_code == requests.codes.not_found:
+        sys.exit(5)
+    else:
+        sys.exit(10)
+
+
+def next_github_url(response):
+    link = response.headers.get('link', None)
+    if link:
+        match = re.search('<(.*)>; rel="next"', link)
+        if match:
+            return match.group(1)
+    return None
+
+
+def get_github_resource(session, resource):
+    response = github_get(session, resource)
+    return_list = list()
+    while True:
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            github_error(response)
+
+        return_list += response.json()
+
+        url = next_github_url(response)
+        if url is None:
+            break
+        response = session.get(url)
+    return return_list
+
+
 @click.group('labelord')
 @click.option('-c', '--config', default='./config.cfg', type=click.Path(),
-        help='Configuration file in INI format.')
+              help='Configuration file in INI format.')
 @click.option('-t', '--token', envvar='GITHUB_TOKEN',
-        help='Access token for GitHub API.')
+              help='Access token for GitHub API.')
 @click.pass_context
 def cli(ctx, config, token):
     # with 'setup.py' the ctx.obj might be None
     ctx.obj = ctx.obj if ctx.obj else {}
 
     # use this session for communication with GitHub
-    session = ctx.obj.get('session', requests.Session())
+    sess = ctx.obj.get('session', requests.Session())
     # save session in context
     # if the session already exists reassign the same session
-    ctx.obj['session'] = session
+    ctx.obj['session'] = sess
 
     cfg = configparser.ConfigParser()
     # if config file does not exist 'cfg' will be empty
@@ -37,73 +81,46 @@ def cli(ctx, config, token):
         click.echo('No GitHub token has been provided')
         sys.exit(3)
 
-    session.headers = {'User-Agent': 'Python'}
-    session.auth = functools.partial(token_auth, token=the_token)
+    sess.headers = {'User-Agent': 'Python'}
+    sess.auth = functools.partial(token_auth, token=the_token)
 
 
 @cli.command(help='List all accessible GitHub repositories.')
 @click.pass_context
 def list_repos(ctx):
-    # TODO: add required options/arguments
-    # TODO: implement the 'list_repos' command
-    session = ctx.obj['session']
-
-    # TODO url creation
     # https://developer.github.com/v3/repos/
-    url = 'https://api.github.com/user/repos?per_page=100&page=1'
-    while True:
-        r = session.get(url)
-
-        try:
-            r.raise_for_status()
-        except requests.exceptions.HTTPError:
-            # TODO separate function
-            click.echo('GitHub: ERROR {} - {}'.format(r.status_code,
-                r.json()['message']))
-            if r.status_code == 401:
-                sys.exit(4)
-            else:
-                sys.exit(10)
-
-        for repo in r.json():
-            click.echo(repo['full_name'])
-
-        # TODO control statements and url matching
-        link = r.headers.get('link', None)
-        if link is None:
-            break
-        else:
-            next_page = re.match('<(.*)>; rel="next"', link)
-            if next_page is None:
-                break
-            url = next_page.group(1)
+    repos = get_github_resource(ctx.obj['session'], 'user/repos')
+    for repo in repos:
+        click.echo(repo['full_name'])
 
 
-
-@cli.command(help='''List all labels set for a repository.
-
-        REPOSLUG is URL-friendly version of repository name (user/repository).
-        ''')
+@cli.command(help='''List all labels set for a repository. REPOSLUG is
+        URL-friendly version of repository name (user/repository).''')
 @click.argument('reposlug')
 @click.pass_context
 def list_labels(ctx, reposlug):
-    # TODO: add required options/arguments
-    # TODO: implement the 'list_labels' command
     # https://developer.github.com/v3/issues/labels/
-    ...
+    resource = 'repos/' + reposlug + '/labels'
+    labels = get_github_resource(ctx.obj['session'], resource)
+    for label in labels:
+        click.echo('#{} {}'.format(label['color'], label['name']))
 
 
-# TODO enhance help
-@cli.command(help='Labels update. MODE can be \'update\' or \'replace\'.')
+@cli.command(help='Update labels. MODE can be \'update\' or \'replace\'.')
 @click.argument('mode', type=click.Choice(['update', 'replace']))
+@click.option('-a', '--all-repos', is_flag=True, default=False,
+              help='''Act on all repositories listed by \'list_repos\'
+              subcommand.''')
 @click.option('-d', '--dry-run', is_flag=True, default=False,
-        help='Print actions but do not apply them on GitHub.')
+              help='Print actions but do not apply them on GitHub.')
+@click.option('-r', '--template-repo', metavar='REPOSLUG',
+              help='Template repository to specify labels.')
 @click.option('-v', '--verbose', is_flag=True, default=False,
-        help='Print actions to standart ouput.')
+              help='Print actions to standart ouput.')
 @click.option('-q', '--quiet', is_flag=True, default=False,
-        help='Do not write anything to stdout or stderr.')
+              help='Do not write anything to stdout or stderr.')
 @click.pass_context
-def run(ctx, mode, dry_run, verbose, quiet):
+def run(ctx, mode, dry_run, verbose, quiet, template_repo):
     # TODO: add required options/arguments
     # TODO: implement the 'run' command
     ...

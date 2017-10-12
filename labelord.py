@@ -4,7 +4,10 @@ import functools
 import click
 import requests
 import configparser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
+
+
+# TODO add docstrings
 
 
 def token_auth(req, token):
@@ -12,12 +15,11 @@ def token_auth(req, token):
     return req
 
 
-def github_get(session, resource, endpoint='https://api.github.com'):
-    url = urljoin(endpoint, resource)
-    return session.get(url, params={'per_page': 100, 'page': 1})
+def prepare_url(resource, endpoint='https://api.github.com'):
+    return urljoin(endpoint, resource)
 
 
-def github_error(response):
+def handle_error(response):
     click.echo('GitHub: ERROR {} - {}'.format(response.status_code,
                response.json()['message']), err=True)
     if response.status_code == requests.codes.unauthorized:
@@ -28,23 +30,24 @@ def github_error(response):
         sys.exit(10)
 
 
-def get_github_resource(session, resource):
-    response = github_get(session, resource)
-    return_list = list()
+def get_resource(session, resource):
+    url = prepare_url(resource)
+    response = session.get(url, params={'per_page': 100, 'page': 1})
+
     while True:
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError:
-            github_error(response)
+            handle_error(response)
 
-        return_list += response.json()
+        for item in response.json():
+            yield item
 
         try:
             url = response.links['next']['url']
         except KeyError:
             break
         response = session.get(url)
-    return return_list
 
 
 def get_token(token, cfg):
@@ -82,13 +85,22 @@ def cli(ctx, config, token):
     session.auth = functools.partial(token_auth, token=get_token(token, cfg))
 
 
+def get_repos(session):
+    repos = get_resource(session, 'user/repos')
+    return (repo['full_name'] for repo in repos)
+
+
 @cli.command(help='List all accessible GitHub repositories.')
 @click.pass_context
 def list_repos(ctx):
     # https://developer.github.com/v3/repos/
-    repos = get_github_resource(ctx.obj['session'], 'user/repos')
-    for repo in repos:
-        click.echo(repo['full_name'])
+    for repo in get_repos(ctx.obj['session']):
+        click.echo(repo)
+
+
+def get_labels(session, reposlug):
+    labels = get_resource(session, 'repos/' + reposlug + '/labels')
+    return ((label['name'], label['color']) for label in labels)
 
 
 @cli.command(help='''List all labels set for a repository. REPOSLUG is
@@ -97,10 +109,21 @@ def list_repos(ctx):
 @click.pass_context
 def list_labels(ctx, reposlug):
     # https://developer.github.com/v3/issues/labels/
-    resource = 'repos/' + reposlug + '/labels'
-    labels = get_github_resource(ctx.obj['session'], resource)
-    for label in labels:
-        click.echo('#{} {}'.format(label['color'], label['name']))
+    for name, color in get_labels(ctx.obj['session'], reposlug):
+        click.echo('#{} {}'.format(color, name))
+
+
+def check_specification(cfg, template_repo, all_repos):
+    # check labels specification
+    if template_repo is None and 'labels' not in cfg.sections() and \
+            cfg.get('others', 'template_repo', fallback=None) is None:
+        click.echo('No labels specification has been found', err=True)
+        sys.exit(6)
+
+    # check repositories specification
+    if all_repos == False and 'repos' not in cfg.sections():
+        click.echo('No repositories specification has been found', err=True)
+        sys.exit(7)
 
 
 @cli.command(help='Update labels. MODE can be \'update\' or \'replace\'.')
@@ -119,18 +142,23 @@ def list_labels(ctx, reposlug):
 @click.pass_context
 def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     # TODO: implement the 'run' command
-
     cfg = ctx.obj['config']
-    # check labels specification
-    if template_repo is None and 'labels' not in cfg.sections() and \
-            cfg.get('others', 'template_repo', fallback=None) is None:
-        click.echo('No labels specification has been found', err=True)
-        sys.exit(6)
+    session = ctx.obj['session']
 
-    # check repositories specification
-    if all_repos == False and 'repos' not in cfg.sections():
-        click.echo('No repositories specification has been found', err=True)
-        sys.exit(7)
+    check_specification(cfg, template_repo, all_repos)
+
+    if template_repo:
+        labels = get_labels(session, template_repo)
+    elif cfg.get('others', 'template_repo', fallback=False):
+        labels = get_labels(session, cfg['others']['template_repo'])
+    else:
+        labels = ((name, color) for name, color in cfg['labels'].items())
+
+    if all_repos:
+        repos = get_repos(session)
+    else:
+        cfg_repos = cfg['repos']
+        repos = (repo for repo in cfg_repos if cfg_repos.getboolean(repo))
 
 
 if __name__ == '__main__':

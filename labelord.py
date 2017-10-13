@@ -1,10 +1,11 @@
 import re
 import sys
+import json
 import functools
 import click
 import requests
 import configparser
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urljoin
 
 
 # TODO add docstrings
@@ -15,48 +16,129 @@ def token_auth(req, token):
     return req
 
 
-def prepare_url(resource, endpoint='https://api.github.com'):
-    return urljoin(endpoint, resource)
-
-
-def handle_error(response):
-    click.echo('GitHub: ERROR {} - {}'.format(response.status_code,
-               response.json()['message']), err=True)
-    if response.status_code == requests.codes.unauthorized:
-        sys.exit(4)
-    elif response.status_code == requests.codes.not_found:
-        sys.exit(5)
-    else:
-        sys.exit(10)
-
-
-def get_resource(session, resource):
-    url = prepare_url(resource)
-    response = session.get(url, params={'per_page': 100, 'page': 1})
-
-    while True:
-        try:
-            response.raise_for_status()
-        except requests.exceptions.HTTPError:
-            handle_error(response)
-
-        for item in response.json():
-            yield item
-
-        try:
-            url = response.links['next']['url']
-        except KeyError:
-            break
-        response = session.get(url)
-
-
-def get_token(token, cfg):
+def get_token(cfg, token):
     try:
         token = token if token else cfg['github']['token']
     except KeyError:
         click.echo('No GitHub token has been provided', err=True)
         sys.exit(3)
     return token
+
+
+def prepare_url(resource, endpoint='https://api.github.com'):
+    return urljoin(endpoint, resource)
+
+
+def get_resource(s, resource):
+    url = prepare_url(resource)
+    r = s.get(url, params={'per_page': 100, 'page': 1})
+
+    while True:
+        r.raise_for_status()
+        # yield each item
+        for item in r.json():
+            yield item
+        # next page
+        try:
+            url = r.links['next']['url']
+        except KeyError:
+            break
+        r = s.get(url)
+
+
+def get_repos(s):
+    return (repo['full_name'] for repo in get_resource(s, 'user/repos'))
+
+
+def get_labels(s, reposlug):
+    return ((label['name'], label['color'])
+            for label in get_resource(s, 'repos/' + reposlug + '/labels'))
+
+
+def check_spec(cfg, template_repo, all_repos):
+    if template_repo is None and 'labels' not in cfg.sections() and \
+            cfg.get('others', 'template_repo', fallback=None) is None:
+        click.echo('No labels specification has been found', err=True)
+        sys.exit(6)
+
+    if all_repos == False and 'repos' not in cfg.sections():
+        click.echo('No repositories specification has been found', err=True)
+        sys.exit(7)
+
+
+def label_spec(s, cfg, template_repo):
+    if template_repo:
+        return dict(get_labels(s, template_repo))
+    elif cfg.get('others', 'template_repo', fallback=False):
+        return dict(get_labels(s, cfg['others']['template_repo']))
+    else:
+        return dict(cfg['labels'])
+
+
+def repos_spec(s, cfg, all_repos):
+    if all_repos:
+        return list(get_repos(s))
+    return [repo for repo in cfg['repos'] if cfg['repos'].getboolean(repo)]
+
+
+def add_label(s, repo, label, color):
+    data = json.dumps({'name': label, 'color': color})
+    return s.post(prepare_url('repos/' + repo + '/labels'), data=data)
+
+
+def update_label(s, repo, label, color):
+    data = json.dumps({'name': label, 'color': color})
+    return s.patch(prepare_url('repos/' + repo + '/labels/' + label), data=data)
+
+
+def delete_label(s, repo, label):
+    return s.delete(prepare_url('repos/' + repo + '/labels/' + label))
+
+
+def change_label(s, act, repo, label, color, dry, verbose, quiet):
+    if not dry:
+        if act == 'ADD':
+            r = add_label(s, repo, label, color)
+        elif act == 'UPD':
+            r = update_label(s, repo, label, color)
+        else:
+            r = delete_label(s, repo, label)
+        try:
+            r.raise_for_status()
+        except requests.exceptions.HTTPError:
+            if r.status_code == requests.codes.not_found:
+                raise
+            if verbose and not quiet:
+                click.echo('[{}][ERR] {}; {}; {}; {} - {}'.format(
+                    act, repo, label, color, r.status_code, r.json()['message'],
+                    err=True))
+            return 1
+
+    if verbose and not quiet:
+        click.echo('[{}][{}] {}; {}; {}'.format(act, 'DRY' if dry else 'SUC', repo, label, color))
+    return 0
+
+
+def change_labels(s, repo, labels, mode, dry, verbose, quiet):
+    err = 0
+    old_labels = dict(get_labels(s, repo))
+
+    # add
+    add = set(labels) - set(old_labels)
+    for l in add:
+        err += change_label(s, 'ADD', repo, l, labels[l], dry, verbose, quiet)
+
+    # update
+    upd = {l[0] for l in set(labels.items()) - set(old_labels.items())} - add
+    for l in upd:
+        err += change_label(s, 'UPD', repo, l, labels[l], dry, verbose, quiet)
+
+    # delete
+    if mode == 'replace':
+        for l in set(old_labels) - set(labels):
+            err += change_label(s, 'DEL', repo, l, old_labels[l], dry, verbose, quiet)
+
+    return err
 
 
 @click.group('labelord')
@@ -82,48 +164,43 @@ def cli(ctx, config, token):
     ctx.obj['config'] = cfg
 
     session.headers = {'User-Agent': 'Python'}
-    session.auth = functools.partial(token_auth, token=get_token(token, cfg))
-
-
-def get_repos(session):
-    repos = get_resource(session, 'user/repos')
-    return (repo['full_name'] for repo in repos)
+    session.auth = functools.partial(token_auth, token=get_token(cfg, token))
 
 
 @cli.command(help='List all accessible GitHub repositories.')
 @click.pass_context
 def list_repos(ctx):
     # https://developer.github.com/v3/repos/
-    for repo in get_repos(ctx.obj['session']):
-        click.echo(repo)
-
-
-def get_labels(session, reposlug):
-    labels = get_resource(session, 'repos/' + reposlug + '/labels')
-    return ((label['name'], label['color']) for label in labels)
+    try:
+        for repo in get_repos(ctx.obj['session']):
+            click.echo(repo)
+    except requests.exceptions.HTTPError as e:
+        r = e.response
+        m = 'GitHub: ERROR {} - {}'.format(r.status_code, r.json()['message'])
+        click.echo(m)
+        if r.status_code == requests.codes.unauthorized:
+            sys.exit(4)
+        sys.exit(10)
 
 
 @cli.command(help='''List all labels set for a repository. REPOSLUG is
-        URL-friendly version of repository name (user/repository).''')
+             URL-friendly version of repository name (user/repository).''')
 @click.argument('reposlug')
 @click.pass_context
 def list_labels(ctx, reposlug):
     # https://developer.github.com/v3/issues/labels/
-    for name, color in get_labels(ctx.obj['session'], reposlug):
-        click.echo('#{} {}'.format(color, name))
-
-
-def check_specification(cfg, template_repo, all_repos):
-    # check labels specification
-    if template_repo is None and 'labels' not in cfg.sections() and \
-            cfg.get('others', 'template_repo', fallback=None) is None:
-        click.echo('No labels specification has been found', err=True)
-        sys.exit(6)
-
-    # check repositories specification
-    if all_repos == False and 'repos' not in cfg.sections():
-        click.echo('No repositories specification has been found', err=True)
-        sys.exit(7)
+    try:
+        for name, color in get_labels(ctx.obj['session'], reposlug):
+            click.echo('#{} {}'.format(color, name))
+    except requests.exceptions.HTTPError as e:
+        r = e.response
+        m = 'GitHub: ERROR {} - {}'.format(r.status_code, r.json()['message'])
+        click.echo(m)
+        if r.status_code == requests.codes.unauthorized:
+            sys.exit(4)
+        if r.status_code == requests.codes.not_found:
+            sys.exit(5)
+        sys.exit(10)
 
 
 @cli.command(help='Update labels. MODE can be \'update\' or \'replace\'.')
@@ -143,23 +220,36 @@ def check_specification(cfg, template_repo, all_repos):
 def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     # TODO: implement the 'run' command
     cfg = ctx.obj['config']
-    session = ctx.obj['session']
+    s = ctx.obj['session']
 
-    check_specification(cfg, template_repo, all_repos)
+    check_spec(cfg, template_repo, all_repos)
+    labels = label_spec(s, cfg, template_repo)
+    repos = repos_spec(s, cfg, all_repos)
 
-    if template_repo:
-        labels = get_labels(session, template_repo)
-    elif cfg.get('others', 'template_repo', fallback=False):
-        labels = get_labels(session, cfg['others']['template_repo'])
-    else:
-        labels = ((name, color) for name, color in cfg['labels'].items())
+    err = 0
+    for repo in repos:
+        try:
+            err += change_labels(s, repo, labels, mode, dry_run, verbose, quiet)
+        except requests.exceptions.HTTPError:
+            if verbose and not quiet:
+                click.echo('[LBL][ERR] {}; 404 - Not Found'.format(repo))
+            err += 1
 
-    if all_repos:
-        repos = get_repos(session)
-    else:
-        cfg_repos = cfg['repos']
-        repos = (repo for repo in cfg_repos if cfg_repos.getboolean(repo))
+    if (verbose and quiet) or (not verbose and not quiet):
+        if err:
+            click.echo('SUMMARY: {} error(s) in total, please check log above'.format(err), err=True)
+            sys.exit(10)
+        else:
+            click.echo('SUMMARY: {} repo(s) updated successfully'.format(len(repos)))
+    elif verbose:
+        if err:
+            click.echo('[SUMMARY] {} error(s) in total, please check log above'.format(err), err=True)
+            sys.exit(10)
+        else:
+            click.echo('[SUMMARY] {} repo(s) updated successfully'.format(len(repos)))
+    elif err:
+        sys.exit(10)
 
 
 if __name__ == '__main__':
-    cli(obj={})
+    cli()

@@ -69,8 +69,8 @@ def check_spec(cfg, template_repo, all_repos):
 def label_spec(s, cfg, template_repo):
     if template_repo:
         return dict(get_labels(s, template_repo))
-    elif cfg.get('others', 'template_repo', fallback=False):
-        return dict(get_labels(s, cfg['others']['template_repo']))
+    elif cfg.get('others', 'template-repo', fallback=False):
+        return dict(get_labels(s, cfg['others']['template-repo']))
     else:
         return dict(cfg['labels'])
 
@@ -110,6 +110,10 @@ def change_label(s, act, repo, label, color, dry, verbose, quiet):
                 raise
             if verbose and not quiet:
                 click.echo('[{}][ERR] {}; {}; {}; {} - {}'.format(
+                    act, repo, label, color, r.status_code, r.json()['message'],
+                    err=True))
+            elif not (not verbose and quiet):
+                click.echo('ERROR: {}; {}; {}; {}; {} - {}'.format(
                     act, repo, label, color, r.status_code, r.json()['message'],
                     err=True))
             return 1
@@ -230,9 +234,14 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     for repo in repos:
         try:
             err += change_labels(s, repo, labels, mode, dry_run, verbose, quiet)
-        except requests.exceptions.HTTPError:
+        except requests.exceptions.HTTPError as e:
             if verbose and not quiet:
                 click.echo('[LBL][ERR] {}; 404 - Not Found'.format(repo))
+            elif not (not verbose and quiet):
+                r = e.response
+                click.echo('ERROR: LBL; {}; {} - {}'.format(
+                    repo, r.status_code, r.json()['message'],
+                    err=True))
             err += 1
 
     if (verbose and quiet) or (not verbose and not quiet):

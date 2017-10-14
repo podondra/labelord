@@ -150,6 +150,7 @@ def change_labels(s, repo, labels, mode, dry, verbose, quiet):
               help='Configuration file in INI format.')
 @click.option('-t', '--token', envvar='GITHUB_TOKEN',
               help='Access token for GitHub API.')
+@click.version_option(0.1)
 @click.pass_context
 def cli(ctx, config, token):
     # with 'setup.py' the ctx.obj might be None
@@ -166,17 +167,21 @@ def cli(ctx, config, token):
     # if config file does not exist 'cfg' will be empty
     cfg.read(config)
     ctx.obj['config'] = cfg
-
-    session.headers = {'User-Agent': 'Python'}
-    session.auth = functools.partial(token_auth, token=get_token(cfg, token))
+    ctx.obj['token'] = token
 
 
 @cli.command(help='List all accessible GitHub repositories.')
 @click.pass_context
 def list_repos(ctx):
+    s = ctx.obj['session']
+    cfg = ctx.obj['config']
+    token = ctx.obj['token']
+    s.headers = {'User-Agent': 'Python'}
+    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
+
     # https://developer.github.com/v3/repos/
     try:
-        for repo in get_repos(ctx.obj['session']):
+        for repo in get_repos(s):
             click.echo(repo)
     except requests.exceptions.HTTPError as e:
         r = e.response
@@ -192,6 +197,12 @@ def list_repos(ctx):
 @click.argument('reposlug')
 @click.pass_context
 def list_labels(ctx, reposlug):
+    s = ctx.obj['session']
+    cfg = ctx.obj['config']
+    token = ctx.obj['token']
+    s.headers = {'User-Agent': 'Python'}
+    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
+
     # https://developer.github.com/v3/issues/labels/
     try:
         for name, color in get_labels(ctx.obj['session'], reposlug):
@@ -223,8 +234,11 @@ def list_labels(ctx, reposlug):
 @click.pass_context
 def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     # TODO: implement the 'run' command
-    cfg = ctx.obj['config']
     s = ctx.obj['session']
+    cfg = ctx.obj['config']
+    token = ctx.obj['token']
+    s.headers = {'User-Agent': 'Python'}
+    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
 
     check_spec(cfg, template_repo, all_repos)
     labels = label_spec(s, cfg, template_repo)

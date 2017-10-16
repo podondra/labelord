@@ -32,6 +32,7 @@ def setup_session(ctx):
     s.headers = {'User-Agent': 'Python'}
     s.auth = functools.partial(token_auth, token=get_token(cfg, token))
 
+
 def prepare_url(resource, endpoint='https://api.github.com'):
     return urljoin(endpoint, resource)
 
@@ -80,43 +81,34 @@ def repos_spec(s, cfg, all_repos):
     return [repo for repo in cfg['repos'] if cfg['repos'].getboolean(repo)]
 
 
-def add_label(s, repo, label, color):
-    data = json.dumps({'name': label, 'color': color})
-    return s.post(prepare_url('repos/' + repo + '/labels'), data=data)
-
-
-def update_label(s, repo, old_label, new_label, color):
-    data = json.dumps({'name': new_label, 'color': color})
-    return s.patch(prepare_url('repos/' + repo + '/labels/' + old_label), data=data)
-
-
-def delete_label(s, repo, label):
-    return s.delete(prepare_url('repos/' + repo + '/labels/' + label))
-
-
 def change_label(s, act, repo, old_label, new_label, color, dry, verbose, quiet):
+    url = prepare_url('repos/' + repo + '/labels')
     if not dry:
         if act == 'ADD':
-            r = add_label(s, repo, new_label, color)
+            data = json.dumps({'name': new_label, 'color': color})
+            r = s.post(url, data=data)
         elif act == 'UPD':
-            r = update_label(s, repo, old_label, new_label, color)
+            data = json.dumps({'name': new_label, 'color': color})
+            r = s.patch(url + '/' + old_label, data=data)
         else:
-            r = delete_label(s, repo, old_label)
+            r = s.delete(url + '/' + old_label)
+
         try:
             r.raise_for_status()
         except requests.exceptions.HTTPError:
             if verbose and not quiet:
-                click.echo('[{}][ERR] {}; {}; {}; {} - {}'.format(
-                    act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
-                    err=True))
+                click.echo('[{}][ERR] {}; {}; {}; {} - {}'
+                           .format(act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
+                           err=True))
             elif not (not verbose and quiet):
                 click.echo('ERROR: {}; {}; {}; {}; {} - {}'.format(
-                    act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
-                    err=True))
+                           act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
+                           err=True))
             return 1
 
     if verbose and not quiet:
         click.echo('[{}][{}] {}; {}; {}'.format(act, 'DRY' if dry else 'SUC', repo, old_label if act == 'DEL' else new_label, color))
+
     return 0
 
 
@@ -249,20 +241,25 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
                     err=True))
             err += 1
 
-    if (verbose and quiet) or (not verbose and not quiet):
-        if err:
-            click.echo('SUMMARY: {} error(s) in total, please check log above'.format(err), err=True)
-            sys.exit(10)
+    if err:
+        if verbose and not quiet:
+            click.echo('[SUMMARY] {} error(s) in total, please check log above'
+                       .format(err), err=True)
+        elif not verbose and quiet:
+            pass
         else:
-            click.echo('SUMMARY: {} repo(s) updated successfully'.format(len(repos)))
-    elif verbose:
-        if err:
-            click.echo('[SUMMARY] {} error(s) in total, please check log above'.format(err), err=True)
-            sys.exit(10)
-        else:
-            click.echo('[SUMMARY] {} repo(s) updated successfully'.format(len(repos)))
-    elif err:
+            click.echo('SUMMARY: {} error(s) in total, please check log above'
+                       .format(err), err=True)
         sys.exit(10)
+
+    if verbose and not quiet:
+        click.echo('[SUMMARY] {} repo(s) updated successfully'
+                   .format(len(repos)))
+    elif not verbose and quiet:
+        pass
+    else:
+        click.echo('SUMMARY: {} repo(s) updated successfully'
+                   .format(len(repos)))
 
 
 if __name__ == '__main__':

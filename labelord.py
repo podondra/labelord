@@ -25,6 +25,13 @@ def get_token(cfg, token):
     return token
 
 
+def setup_session(ctx):
+    s = ctx.obj['session']
+    token = ctx.obj['token']
+    cfg = ctx.obj['config']
+    s.headers = {'User-Agent': 'Python'}
+    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
+
 def prepare_url(resource, endpoint='https://api.github.com'):
     return urljoin(endpoint, resource)
 
@@ -166,11 +173,8 @@ def cli(ctx, config, token):
 @cli.command(help='List all accessible GitHub repositories.')
 @click.pass_context
 def list_repos(ctx):
+    setup_session(ctx)
     s = ctx.obj['session']
-    cfg = ctx.obj['config']
-    token = ctx.obj['token']
-    s.headers = {'User-Agent': 'Python'}
-    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
 
     # https://developer.github.com/v3/repos/
     try:
@@ -190,11 +194,8 @@ def list_repos(ctx):
 @click.argument('reposlug')
 @click.pass_context
 def list_labels(ctx, reposlug):
+    setup_session(ctx)
     s = ctx.obj['session']
-    cfg = ctx.obj['config']
-    token = ctx.obj['token']
-    s.headers = {'User-Agent': 'Python'}
-    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
 
     # https://developer.github.com/v3/issues/labels/
     try:
@@ -226,12 +227,9 @@ def list_labels(ctx, reposlug):
               help='Do not write anything to stdout or stderr.')
 @click.pass_context
 def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
-    # TODO: implement the 'run' command
+    setup_session(ctx)
     s = ctx.obj['session']
     cfg = ctx.obj['config']
-    token = ctx.obj['token']
-    s.headers = {'User-Agent': 'Python'}
-    s.auth = functools.partial(token_auth, token=get_token(cfg, token))
 
     check_spec(cfg, template_repo, all_repos)
     labels = label_spec(s, cfg, template_repo)

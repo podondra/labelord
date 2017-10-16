@@ -46,18 +46,10 @@ def get_resource(s, resource):
         r = s.get(url)
 
 
-def get_repos(s):
-    return (repo['full_name'] for repo in get_resource(s, 'user/repos'))
-
-
-def get_labels(s, reposlug):
-    return ((label['name'], label['color'])
-            for label in get_resource(s, 'repos/' + reposlug + '/labels'))
-
-
 def check_spec(cfg, template_repo, all_repos):
-    if template_repo is None and 'labels' not in cfg.sections() and \
-            cfg.get('others', 'template_repo', fallback=None) is None:
+    if template_repo is None and \
+       'labels' not in cfg.sections() and \
+       cfg.get('others', 'template_repo', fallback=None) is None:
         click.echo('No labels specification has been found', err=True)
         sys.exit(6)
 
@@ -68,16 +60,16 @@ def check_spec(cfg, template_repo, all_repos):
 
 def label_spec(s, cfg, template_repo):
     if template_repo:
-        return dict(get_labels(s, template_repo))
+        return {l['name']: l['color'] for l in get_resource(s, 'repos/' + template_repo + '/labels')}
     elif cfg.get('others', 'template-repo', fallback=False):
-        return dict(get_labels(s, cfg['others']['template-repo']))
+        return {l['name']: l['color'] for l in get_resource(s, 'repos/' + cfg['others']['template-repo'] + '/labels')}
     else:
         return dict(cfg['labels'])
 
 
 def repos_spec(s, cfg, all_repos):
     if all_repos:
-        return list(get_repos(s))
+        return list(repo['full_name'] for repo in get_resource(s, 'user/repos'))
     return [repo for repo in cfg['repos'] if cfg['repos'].getboolean(repo)]
 
 
@@ -86,61 +78,62 @@ def add_label(s, repo, label, color):
     return s.post(prepare_url('repos/' + repo + '/labels'), data=data)
 
 
-def update_label(s, repo, label, color):
-    data = json.dumps({'name': label, 'color': color})
-    return s.patch(prepare_url('repos/' + repo + '/labels/' + label), data=data)
+def update_label(s, repo, old_label, new_label, color):
+    data = json.dumps({'name': new_label, 'color': color})
+    return s.patch(prepare_url('repos/' + repo + '/labels/' + old_label), data=data)
 
 
 def delete_label(s, repo, label):
     return s.delete(prepare_url('repos/' + repo + '/labels/' + label))
 
 
-def change_label(s, act, repo, label, color, dry, verbose, quiet):
+def change_label(s, act, repo, old_label, new_label, color, dry, verbose, quiet):
     if not dry:
         if act == 'ADD':
-            r = add_label(s, repo, label, color)
+            r = add_label(s, repo, new_label, color)
         elif act == 'UPD':
-            r = update_label(s, repo, label, color)
+            r = update_label(s, repo, old_label, new_label, color)
         else:
-            r = delete_label(s, repo, label)
+            r = delete_label(s, repo, old_label)
         try:
             r.raise_for_status()
         except requests.exceptions.HTTPError:
-            if r.status_code == requests.codes.not_found:
-                raise
             if verbose and not quiet:
                 click.echo('[{}][ERR] {}; {}; {}; {} - {}'.format(
-                    act, repo, label, color, r.status_code, r.json()['message'],
+                    act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
                     err=True))
             elif not (not verbose and quiet):
                 click.echo('ERROR: {}; {}; {}; {}; {} - {}'.format(
-                    act, repo, label, color, r.status_code, r.json()['message'],
+                    act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
                     err=True))
             return 1
 
     if verbose and not quiet:
-        click.echo('[{}][{}] {}; {}; {}'.format(act, 'DRY' if dry else 'SUC', repo, label, color))
+        click.echo('[{}][{}] {}; {}; {}'.format(act, 'DRY' if dry else 'SUC', repo, old_label if act == 'DEL' else new_label, color))
     return 0
 
 
 def change_labels(s, repo, labels, mode, dry, verbose, quiet):
     err = 0
-    old_labels = dict(get_labels(s, repo))
+    old_labels = {l['name']: l['color'] for l in get_resource(s, 'repos/' + repo + '/labels')}
+
+    lower_new = {l.lower(): {'name': l, 'color': c} for l, c in labels.items()}
+    lower_old = {l.lower(): {'name': l, 'color': c} for l, c in old_labels.items()}
 
     # add
-    add = set(labels) - set(old_labels)
+    add = set(lower_new) - set(lower_old)
     for l in add:
-        err += change_label(s, 'ADD', repo, l, labels[l], dry, verbose, quiet)
+        err += change_label(s, 'ADD', repo, None, lower_new[l]['name'], lower_new[l]['color'], dry, verbose, quiet)
 
     # update
-    upd = {l[0] for l in set(labels.items()) - set(old_labels.items())} - add
+    upd = {l.lower() for l, _ in set(labels.items()) - set(old_labels.items())} - add
     for l in upd:
-        err += change_label(s, 'UPD', repo, l, labels[l], dry, verbose, quiet)
+        err += change_label(s, 'UPD', repo, lower_old[l]['name'], lower_new[l]['name'], lower_new[l]['color'], dry, verbose, quiet)
 
     # delete
     if mode == 'replace':
-        for l in set(old_labels) - set(labels):
-            err += change_label(s, 'DEL', repo, l, old_labels[l], dry, verbose, quiet)
+        for l in set(lower_old) - set(lower_new):
+            err += change_label(s, 'DEL', repo, lower_old[l]['name'], None, lower_old[l]['color'], dry, verbose, quiet)
 
     return err
 
@@ -181,8 +174,8 @@ def list_repos(ctx):
 
     # https://developer.github.com/v3/repos/
     try:
-        for repo in get_repos(s):
-            click.echo(repo)
+        for repo in get_resource(s, 'user/repos'):
+            click.echo(repo['full_name'])
     except requests.exceptions.HTTPError as e:
         r = e.response
         m = 'GitHub: ERROR {} - {}'.format(r.status_code, r.json()['message'])
@@ -205,8 +198,8 @@ def list_labels(ctx, reposlug):
 
     # https://developer.github.com/v3/issues/labels/
     try:
-        for name, color in get_labels(ctx.obj['session'], reposlug):
-            click.echo('#{} {}'.format(color, name))
+        for label in get_resource(s, 'repos/' + reposlug + '/labels'):
+            click.echo('#{} {}'.format(label['color'], label['name']))
     except requests.exceptions.HTTPError as e:
         r = e.response
         m = 'GitHub: ERROR {} - {}'.format(r.status_code, r.json()['message'])

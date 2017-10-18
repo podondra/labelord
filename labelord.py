@@ -61,78 +61,92 @@ def check_spec(cfg, template_repo, all_repos):
         click.echo('No labels specification has been found', err=True)
         sys.exit(6)
 
-    if all_repos == False and 'repos' not in cfg.sections():
+    if not all_repos and 'repos' not in cfg.sections():
         click.echo('No repositories specification has been found', err=True)
         sys.exit(7)
 
 
 def label_spec(s, cfg, template_repo):
     if template_repo:
-        return {l['name']: l['color'] for l in get_resource(s, 'repos/' + template_repo + '/labels')}
+        labels = get_resource(s, 'repos/' + template_repo + '/labels')
+        return {l['name'].lower(): (l['name'], l['color']) for l in labels}
     elif cfg.get('others', 'template-repo', fallback=False):
-        return {l['name']: l['color'] for l in get_resource(s, 'repos/' + cfg['others']['template-repo'] + '/labels')}
+        repo = cfg['others']['template-repo']
+        labels = get_resource(s, 'repos/' + repo + '/labels')
+        return {l['name'].lower(): (l['name'], l['color']) for l in labels}
     else:
-        return dict(cfg['labels'])
+        return {l.lower(): (l, c) for l, c in cfg['labels'].items()}
 
 
 def repos_spec(s, cfg, all_repos):
     if all_repos:
-        return list(repo['full_name'] for repo in get_resource(s, 'user/repos'))
+        resource = get_resource(s, 'user/repos')
+        return list(repo['full_name'] for repo in resource)
     return [repo for repo in cfg['repos'] if cfg['repos'].getboolean(repo)]
 
 
-def change_label(s, act, repo, old_label, new_label, color, dry, verbose, quiet):
-    url = prepare_url('repos/' + repo + '/labels')
+def out_spec(verbose, quiet):
+    if verbose and not quiet:
+        return 'verbose'
+    elif not verbose and quiet:
+        return 'quiet'
+    else:
+        return 'semi'
+
+
+def change_label(s, act, repo, old_label, new_label, color, dry, out):
+    l = old_label if act == 'DEL' else new_label
     if not dry:
+        url = prepare_url('repos/' + repo + '/labels')
+        if act == 'DEL':
+            r = s.delete(url + '/' + old_label)
+
+        data = json.dumps({'name': new_label, 'color': color})
         if act == 'ADD':
-            data = json.dumps({'name': new_label, 'color': color})
             r = s.post(url, data=data)
         elif act == 'UPD':
-            data = json.dumps({'name': new_label, 'color': color})
             r = s.patch(url + '/' + old_label, data=data)
-        else:
-            r = s.delete(url + '/' + old_label)
 
         try:
             r.raise_for_status()
         except requests.exceptions.HTTPError:
-            if verbose and not quiet:
-                click.echo('[{}][ERR] {}; {}; {}; {} - {}'
-                           .format(act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
-                           err=True))
-            elif not (not verbose and quiet):
-                click.echo('ERROR: {}; {}; {}; {}; {} - {}'.format(
-                           act, repo, old_label if act == 'DEL' else new_label, color, r.status_code, r.json()['message'],
-                           err=True))
+            if out == 'verbose':
+                m = '[{}][ERR] {}; {}; {}; {} - {}'
+            elif out == 'semi':
+                m = 'ERROR: {}; {}; {}; {}; {} - {}'
+            if out != 'quiet':
+                error = r.json()['message']
+                st = r.status_code
+                click.echo(m.format(act, repo, l, color, st, error), err=True)
             return 1
 
-    if verbose and not quiet:
-        click.echo('[{}][{}] {}; {}; {}'.format(act, 'DRY' if dry else 'SUC', repo, old_label if act == 'DEL' else new_label, color))
+    if out == 'verbose':
+        res = 'DRY' if dry else 'SUC'
+        click.echo('[{}][{}] {}; {}; {}'.format(act, res, repo, l, color))
 
     return 0
 
 
-def change_labels(s, repo, labels, mode, dry, verbose, quiet):
+def change_labels(s, repo, new_lbls, mode, dry, out):
     err = 0
-    old_labels = {l['name']: l['color'] for l in get_resource(s, 'repos/' + repo + '/labels')}
-
-    lower_new = {l.lower(): {'name': l, 'color': c} for l, c in labels.items()}
-    lower_old = {l.lower(): {'name': l, 'color': c} for l, c in old_labels.items()}
+    resource = get_resource(s, 'repos/' + repo + '/labels')
+    old_lbls = {l['name'].lower(): (l['name'], l['color']) for l in resource}
 
     # add
-    add = set(lower_new) - set(lower_old)
+    add = set(new_lbls) - set(old_lbls)
     for l in add:
-        err += change_label(s, 'ADD', repo, None, lower_new[l]['name'], lower_new[l]['color'], dry, verbose, quiet)
-
+        err += change_label(s, 'ADD', repo, None, new_lbls[l][0],
+                            new_lbls[l][1], dry, out)
     # update
-    upd = {l.lower() for l, _ in set(labels.items()) - set(old_labels.items())} - add
+    upd = {l for l, _ in set(new_lbls.items()) - set(old_lbls.items())} - add
     for l in upd:
-        err += change_label(s, 'UPD', repo, lower_old[l]['name'], lower_new[l]['name'], lower_new[l]['color'], dry, verbose, quiet)
-
+        err += change_label(s, 'UPD', repo, old_lbls[l][0], new_lbls[l][0],
+                            new_lbls[l][1], dry, out)
     # delete
     if mode == 'replace':
-        for l in set(lower_old) - set(lower_new):
-            err += change_label(s, 'DEL', repo, lower_old[l]['name'], None, lower_old[l]['color'], dry, verbose, quiet)
+        for l in set(old_lbls) - set(new_lbls):
+            err += change_label(s, 'DEL', repo, old_lbls[l][0], None,
+                                old_lbls[l][1], dry, out)
 
     return err
 
@@ -226,40 +240,34 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     check_spec(cfg, template_repo, all_repos)
     labels = label_spec(s, cfg, template_repo)
     repos = repos_spec(s, cfg, all_repos)
+    out = out_spec(verbose, quiet)
 
     err = 0
     for repo in repos:
         try:
-            err += change_labels(s, repo, labels, mode, dry_run, verbose, quiet)
+            err += change_labels(s, repo, labels, mode, dry_run, out)
         except requests.exceptions.HTTPError as e:
-            if verbose and not quiet:
-                click.echo('[LBL][ERR] {}; 404 - Not Found'.format(repo))
-            elif not (not verbose and quiet):
-                r = e.response
-                click.echo('ERROR: LBL; {}; {} - {}'.format(
-                    repo, r.status_code, r.json()['message'],
-                    err=True))
             err += 1
+            if out == 'verbose':
+                click.echo('[LBL][ERR] {}; 404 - Not Found'.format(repo))
+            elif out == 'semi':
+                r = e.response
+                click.echo('ERROR: LBL; {}; {} - {}'.format(repo,
+                           r.status_code, r.json()['message'], err=True))
 
     if err:
-        if verbose and not quiet:
-            click.echo('[SUMMARY] {} error(s) in total, please check log above'
-                       .format(err), err=True)
-        elif not verbose and quiet:
-            pass
-        else:
-            click.echo('SUMMARY: {} error(s) in total, please check log above'
-                       .format(err), err=True)
+        m = 'error(s) in total, please check log above'
+        if out == 'verbose':
+            click.echo('[SUMMARY] {} {}'.format(err, m), err=True)
+        elif out == 'semi':
+            click.echo('SUMMARY: {} {}'.format(err, m), err=True)
         sys.exit(10)
 
-    if verbose and not quiet:
-        click.echo('[SUMMARY] {} repo(s) updated successfully'
-                   .format(len(repos)))
-    elif not verbose and quiet:
-        pass
-    else:
-        click.echo('SUMMARY: {} repo(s) updated successfully'
-                   .format(len(repos)))
+    m = 'repo(s) updated successfully'
+    if out == 'verbose':
+        click.echo('[SUMMARY] {} {}'.format(len(repos), m))
+    elif out == 'semi':
+        click.echo('SUMMARY: {} {}'.format(len(repos), m))
 
 
 if __name__ == '__main__':

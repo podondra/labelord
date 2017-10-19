@@ -8,15 +8,16 @@ import configparser
 from urllib.parse import urljoin
 
 
-# TODO add docstrings
-
-
 def token_auth(req, token):
+    """Token auth handler."""
     req.headers['Authorization'] = 'token ' + token
     return req
 
 
 def get_token(cfg, token):
+    """Return GitHub access token. The token is provided as '-t/--token
+    parameter, in evironment variable 'GITHUB_TOKEN' or in configuration
+    file."""
     try:
         token = token if token else cfg['github']['token']
     except KeyError:
@@ -26,6 +27,7 @@ def get_token(cfg, token):
 
 
 def setup_session(ctx):
+    """Setup requests' Session object to communicate with GitHub API."""
     s = ctx.obj['session']
     token = ctx.obj['token']
     cfg = ctx.obj['config']
@@ -34,10 +36,12 @@ def setup_session(ctx):
 
 
 def prepare_url(resource, endpoint='https://api.github.com'):
+    """Prepare URL for GitHub API."""
     return urljoin(endpoint, resource)
 
 
 def get_resource(s, resource):
+    """Get resource from GitHub API. It is a generator. Handle pagitation."""
     url = prepare_url(resource)
     r = s.get(url, params={'per_page': 100, 'page': 1})
 
@@ -55,6 +59,8 @@ def get_resource(s, resource):
 
 
 def check_spec(cfg, template_repo, all_repos):
+    """Check specification of labels and repositories for labelord's run
+    command. If error is found exit with approprate code."""
     if template_repo is None and \
        'labels' not in cfg.sections() and \
        cfg.get('others', 'template_repo', fallback=None) is None:
@@ -67,6 +73,8 @@ def check_spec(cfg, template_repo, all_repos):
 
 
 def label_spec(s, cfg, template_repo):
+    """Return labels of a repository as dictionary. Key is lowercase label's
+    name and value is tuple of label and color."""
     if template_repo:
         labels = get_resource(s, 'repos/' + template_repo + '/labels')
         return {l['name'].lower(): (l['name'], l['color']) for l in labels}
@@ -79,6 +87,8 @@ def label_spec(s, cfg, template_repo):
 
 
 def repos_spec(s, cfg, all_repos):
+    """Return list of repositories for labelord's run command. Can be
+    specified by '-a/--all-repos' option or in configuration file."""
     if all_repos:
         resource = get_resource(s, 'user/repos')
         return list(repo['full_name'] for repo in resource)
@@ -86,6 +96,7 @@ def repos_spec(s, cfg, all_repos):
 
 
 def out_spec(verbose, quiet):
+    """Find out what the command line output should be."""
     if verbose and not quiet:
         return 'verbose'
     elif not verbose and quiet:
@@ -95,6 +106,7 @@ def out_spec(verbose, quiet):
 
 
 def change_label(s, act, repo, old_label, new_label, color, dry, out):
+    """Add, update or delete label in a repository."""
     l = old_label if act == 'DEL' else new_label
     if not dry:
         url = prepare_url('repos/' + repo + '/labels')
@@ -128,6 +140,7 @@ def change_label(s, act, repo, old_label, new_label, color, dry, out):
 
 
 def change_labels(s, repo, new_lbls, mode, dry, out):
+    """Change labels in a repository according to new_lbls."""
     err = 0
     resource = get_resource(s, 'repos/' + repo + '/labels')
     old_lbls = {l['name'].lower(): (l['name'], l['color']) for l in resource}
@@ -256,18 +269,18 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
                            r.status_code, r.json()['message'], err=True))
 
     if err:
-        m = 'error(s) in total, please check log above'
+        m = '{} {} error(s) in total, please check log above'
         if out == 'verbose':
-            click.echo('[SUMMARY] {} {}'.format(err, m), err=True)
+            click.echo(m.format('[SUMMARY]', err, m), err=True)
         elif out == 'semi':
-            click.echo('SUMMARY: {} {}'.format(err, m), err=True)
+            click.echo(m.format('SUMMARY:', err), err=True)
         sys.exit(10)
 
-    m = 'repo(s) updated successfully'
+    m = '{} {} repo(s) updated successfully'
     if out == 'verbose':
-        click.echo('[SUMMARY] {} {}'.format(len(repos), m))
+        click.echo(m.format('[SUMMARY]', len(repos)))
     elif out == 'semi':
-        click.echo('SUMMARY: {} {}'.format(len(repos), m))
+        click.echo(m.format('SUMMARY:', len(repos)))
 
 
 if __name__ == '__main__':

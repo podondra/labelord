@@ -194,7 +194,7 @@ def cli(ctx, config, token):
     ctx.obj['token'] = token
 
 
-@cli.command(help='List all accessible GitHub repositories.')
+@cli.command(help='List all accessible repositories.')
 @click.pass_context
 def list_repos(ctx):
     setup_session(ctx)
@@ -236,8 +236,9 @@ def list_labels(ctx, reposlug):
         sys.exit(10)
 
 
-@cli.command(help='Update labels. MODE can be \'update\' or \'replace\'.')
-@click.argument('mode', type=click.Choice(['update', 'replace']))
+@cli.command(help='Run labels processing.')
+@click.argument('mode', type=click.Choice(['update', 'replace']),
+                metavar='<update|replace>')
 @click.option('-a', '--all-repos', is_flag=True, default=False,
               help='''Act on all repositories listed by \'list_repos\'
               subcommand.''')
@@ -248,7 +249,7 @@ def list_labels(ctx, reposlug):
 @click.option('-v', '--verbose', is_flag=True, default=False,
               help='Print actions to standart ouput.')
 @click.option('-q', '--quiet', is_flag=True, default=False,
-              help='Do not write anything to stdout or stderr.')
+              help='No output at all')
 @click.pass_context
 def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     setup_session(ctx)

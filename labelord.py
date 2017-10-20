@@ -1,6 +1,5 @@
 import re
 import sys
-import json
 import functools
 import click
 import requests
@@ -72,16 +71,22 @@ def check_spec(cfg, template_repo, all_repos):
         sys.exit(7)
 
 
-def label_spec(s, cfg, template_repo):
+def labels_dict(labels):
+    """Return dictionary with lowercase label's names as keys and value is
+    tuple of label's name and label's color."""
+    return {lbl['name'].lower(): (lbl['name'], lbl['color']) for lbl in labels}
+
+
+def labels_spec(s, cfg, template_repo):
     """Return labels of a repository as dictionary. Key is lowercase label's
     name and value is tuple of label and color."""
     if template_repo:
         labels = get_resource(s, 'repos/' + template_repo + '/labels')
-        return {l['name'].lower(): (l['name'], l['color']) for l in labels}
+        return labels_dict(labels)
     elif cfg.get('others', 'template-repo', fallback=False):
         repo = cfg['others']['template-repo']
         labels = get_resource(s, 'repos/' + repo + '/labels')
-        return {l['name'].lower(): (l['name'], l['color']) for l in labels}
+        return labels_dict(labels)
     else:
         return {l.lower(): (l, c) for l, c in cfg['labels'].items()}
 
@@ -113,11 +118,11 @@ def change_label(s, act, repo, old_label, new_label, color, dry, out):
         if act == 'DEL':
             r = s.delete(url + '/' + old_label)
 
-        data = json.dumps({'name': new_label, 'color': color})
+        data = {'name': new_label, 'color': color}
         if act == 'ADD':
-            r = s.post(url, data=data)
+            r = s.post(url, json=data)
         elif act == 'UPD':
-            r = s.patch(url + '/' + old_label, data=data)
+            r = s.patch(url + '/' + old_label, json=data)
 
         try:
             r.raise_for_status()
@@ -142,8 +147,8 @@ def change_label(s, act, repo, old_label, new_label, color, dry, out):
 def change_labels(s, repo, new_lbls, mode, dry, out):
     """Change labels in a repository according to new_lbls."""
     err = 0
-    resource = get_resource(s, 'repos/' + repo + '/labels')
-    old_lbls = {l['name'].lower(): (l['name'], l['color']) for l in resource}
+    labels = get_resource(s, 'repos/' + repo + '/labels')
+    old_lbls = labels_dict(labels)
 
     # add
     add = set(new_lbls) - set(old_lbls)
@@ -202,7 +207,7 @@ def list_repos(ctx):
     except requests.exceptions.HTTPError as e:
         r = e.response
         m = 'GitHub: ERROR {} - {}'.format(r.status_code, r.json()['message'])
-        click.echo(m)
+        click.echo(m, err=True)
         if r.status_code == requests.codes.unauthorized:
             sys.exit(4)
         sys.exit(10)
@@ -223,7 +228,7 @@ def list_labels(ctx, reposlug):
     except requests.exceptions.HTTPError as e:
         r = e.response
         m = 'GitHub: ERROR {} - {}'.format(r.status_code, r.json()['message'])
-        click.echo(m)
+        click.echo(m, err=True)
         if r.status_code == requests.codes.unauthorized:
             sys.exit(4)
         if r.status_code == requests.codes.not_found:
@@ -251,7 +256,7 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     cfg = ctx.obj['config']
 
     check_spec(cfg, template_repo, all_repos)
-    labels = label_spec(s, cfg, template_repo)
+    labels = labels_spec(s, cfg, template_repo)
     repos = repos_spec(s, cfg, all_repos)
     out = out_spec(verbose, quiet)
 
@@ -262,11 +267,14 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
         except requests.exceptions.HTTPError as e:
             err += 1
             if out == 'verbose':
-                click.echo('[LBL][ERR] {}; 404 - Not Found'.format(repo))
+                m = '[LBL][ERR] {}; {} - {}'
             elif out == 'semi':
+                m = 'ERROR: LBL; {}; {} - {}'
+            if out != 'quiet':
                 r = e.response
-                click.echo('ERROR: LBL; {}; {} - {}'.format(repo,
-                           r.status_code, r.json()['message'], err=True))
+                code = r.status_code
+                click.echo(m.format(repo, code, r.json()['message'], err=True))
+
 
     if err:
         m = '{} {} error(s) in total, please check log above'

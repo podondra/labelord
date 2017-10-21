@@ -9,7 +9,7 @@ For usage type `labelord --help` into your command line.
 ## configuration file
 
 Configuration file in [INI](https://en.wikipedia.org/wiki/INI_file) format.
-See config.cfg.sample file for configuration example.
+See `config.cfg.sample` file for configuration example.
 
 ## install
 

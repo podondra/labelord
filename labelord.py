@@ -323,7 +323,7 @@ class LabelordWeb(flask.Flask):
     token = None
     webhook_secret = None
     repos = set()
-    labels = dict()
+    ignored = list()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -401,26 +401,37 @@ def index():
     if response['repository']['full_name'] not in app.repos:
         return '', 400
 
-    lbl = response['label']['name']
     action = response['action'] 
-    if lbl in app.labels and app.labels[lbl] == action:
-        return '', 200
-    else:
-        app.labels[lbl] = action
+    lbl = response['label']['name']
+    color = response['label']['color']
 
-    data = {'name': lbl, 'color': response['label']['color']}
+    if action != 'created':
+        if action == 'edited':
+            item = (action, response['repository']['full_name'], lbl, color)
+        elif action == 'deleted':
+            item = (action, response['repository']['full_name'], lbl)
+        if item in app.ignored:
+            app.ignored.remove(item)
+            return '', 200
+
+    data = {'name': lbl, 'color': color}
     for repo in app.repos - {response['repository']['full_name']}:
+        app.ignored.append((action, repo, lbl, color))
         url = prepare_url('repos/' + repo + '/labels')
         if action == 'created':
             app.session.post(url, json=data)
         elif action == 'edited':
+            app.ignored.append((action, repo, lbl, color))
             try:
                 lbl = response['changes']['name']['from']
             except KeyError:
                 pass
             app.session.patch(url + '/' + lbl, json=data)
-        else:
+        elif action == 'deleted':
+            app.ignored.append((action, repo, lbl))
             app.session.delete(url + '/' + lbl)
+        else:
+            return '', 500
 
     return '', 200
 

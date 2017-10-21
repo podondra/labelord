@@ -29,6 +29,7 @@ def get_token(cfg, token):
 
 
 def get_webhook_secret(cfg):
+    """Return secret for GitHub webhook."""
     try:
         webhook_secret = cfg['github']['webhook_secret']
     except KeyError:
@@ -38,6 +39,7 @@ def get_webhook_secret(cfg):
 
 
 def get_config_repos(cfg):
+    """Return list of repositories configured in configuration file."""
     try:
         repos = {r for r in cfg['repos'] if cfg['repos'].getboolean(r)}
     except KeyError:
@@ -327,28 +329,20 @@ class LabelordWeb(flask.Flask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # you can do something here but you don't have to
-        # adding more args before *args is also possible
-        # you need to pass import_name to super as first arg or
-        # via keyword (e.g. import_name=__name__)
-        # be careful not to override something Flask-specific
-        # @see http://flask.pocoo.org/docs/0.12/api/
-        # @see https://github.com/pallets/flask
 
     def inject_session(self, session):
         # inject session for communication with GitHub
         # the tests will call this method to pass the testing session
         # always use session from this call (it will be called before
         # any HTTP request)
-        # if this method is not called, create new session.
+        # if this method is not called create new session
         self.session = session
 
     def reload_config(self):
-        # check envvar LABELORD_CONFIG and reload the config
-        # because there are problems with reimporting the app with
-        # different configuration, this method will be called in
-        # order to reload configuration file
-        # check if everything is correctly set-up
+        """Check envvar LABELORD_CONFIG and reload the config, because there
+        are problems with reimporting the app with different configuration,
+        this method will be called in order to reload configuration file
+        check if everything is correctly set-up."""
         path = os.getenv('LABELORD_CONFIG', default='./config.cfg')
         cfg = parse_config(path)
         self.repos = get_config_repos(cfg)
@@ -358,6 +352,7 @@ class LabelordWeb(flask.Flask):
         self.session.auth = functools.partial(token_auth, token=self.token)
 
     def verify_signature(self, request):
+        """Check the request's signature."""
         body = request.get_data()
         signature = request.headers.get('X-Hub-Signature', None)
         if signature is None:
@@ -367,6 +362,7 @@ class LabelordWeb(flask.Flask):
                                    signature.encode())
 
     def should_ignore_event(self, action, repo, label, color):
+        """Check if GitHub event should be ignored."""
         item = (action, repo, label, color)
         if action == 'deleted':
             item = (action, repo, label)
@@ -384,6 +380,7 @@ app = LabelordWeb(__name__)
 
 @app.before_first_request
 def configurate_app():
+    """Configurate the application before first request."""
     current_app = flask.current_app
     if app.token is None or app.webhook_secret is None:
         app.reload_config()
@@ -449,6 +446,7 @@ def index():
 
 @app.template_filter('repo_url')
 def repo_url(repo):
+    """Flask filter which created link to GitHub repository."""
     return urljoin('https://github.com', repo)
 
 

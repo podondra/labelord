@@ -3,6 +3,8 @@ import functools
 import click
 import flask
 import os
+import hmac
+import hashlib
 import requests
 import configparser
 from urllib.parse import urljoin
@@ -24,6 +26,24 @@ def get_token(cfg, token):
         click.echo('No GitHub token has been provided', err=True)
         sys.exit(3)
     return token
+
+
+def get_webhook_secret(cfg):
+    try:
+        webhook_secret = cfg['github']['webhook_secret']
+    except KeyError:
+        click.echo('No webhook secret has been provided', err=True)
+        sys.exit(8)
+    return webhook_secret
+
+
+def get_config_repos(cfg):
+    try:
+        repos = {repo for repo in cfg['repos'] if cfg['repos'].getboolean(repo)}
+    except KeyError:
+        click.echo('No repositories specification has been found', err=True)
+        sys.exit(7)
+    return repos
 
 
 def setup_session(ctx):
@@ -300,7 +320,10 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
 
 class LabelordWeb(flask.Flask):
     session = requests.Session()
-    repos = list()
+    token = None
+    webhook_secret = None
+    repos = set()
+    labels = dict()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -321,7 +344,6 @@ class LabelordWeb(flask.Flask):
         self.session = session
 
     def reload_config(self):
-        # TODO merge into functions with CLI part
         # TODO check envvar LABELORD_CONFIG and reload the config
         # because there are problems with reimporting the app with
         # different configuration, this method will be called in
@@ -329,48 +351,78 @@ class LabelordWeb(flask.Flask):
         # check if everything is correctly set-up
         path = os.getenv('LABELORD_CONFIG', default='./config.cfg')
         cfg = parse_config(path)
+        self.repos = get_config_repos(cfg)
+        self.token = get_token(cfg, token=None)
+        self.webhook_secret = get_webhook_secret(cfg)
+        self.session.headers = {'User-Agent': 'Python'}
+        self.session.auth = functools.partial(token_auth, token=self.token)
 
-        try:
-            self.repos = [r for r in cfg['repos'] if cfg['repos'].getboolean(r)]
-        except KeyError:
-            click.echo('No repositories specification has been found', err=True)
-            sys.exit(7)
-
-        try:
-            token = cfg['github']['token']
-        except KeyError:
-            click.echo('No GitHub token has been provided', err=True)
-            sys.exit(3)
-
-        try:
-            webhook_secret = cfg['github']['webhook_secret']
-        except KeyError:
-            click.echo('No webhook secret has been provided', err=True)
-            sys.exit(8)
+    def verify_signature(self, body, signature):
+        h = hmac.new(self.webhook_secret.encode(), body, hashlib.sha1)
+        return hmac.compare_digest(('sha1=' + h.hexdigest()).encode(),
+                                   signature.encode())
 
 
 # instantiate LabelordWeb app
 # be careful with configs this is module-wide variable
 # you want to be able to run CLI app as it was in task 1
-def create_app():
-    """Application factory function."""
-    app = LabelordWeb(__name__)
-    app.reload_config()
-    return app
-
-app = create_app()
+app = LabelordWeb(__name__)
 
 # TODO: implement web app
 # hint: you can use flask.current_app (inside app context)
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    if flask.request.method == 'GET':
-        repos = flask.current_app.repos
+    app = flask.current_app
+    if app.token is None or app.webhook_secret is None:
+        app.reload_config()
+
+    request = flask.request
+    if request.method == 'GET':
+        repos = app.repos
         return flask.render_template('index.html', repos=repos)
+
+    # method is POST
+    # check webhook signature
+    body = request.get_data()
+    signature = request.headers.get('X-Hub-Signature', None)
+    if signature is None or not app.verify_signature(body, signature):
+        return '', 401
+
+    # check event
+    if request.headers.get('X-GitHub-Event', None) == 'ping':
+        return '', 200
+    elif request.headers.get('X-GitHub-Event', None) != 'label':
+        # not allowed event
+        return '', 400
+
+    # check repository validity
+    response = request.get_json()
+    if response['repository']['full_name'] not in app.repos:
+        return '', 400
+
+    lbl = response['label']['name']
+    action = response['action'] 
+    if lbl in app.labels and app.labels[lbl] == action:
+        return '', 200
     else:
-        # TODO 204 NO CONTENT
-        return ''
+        app.labels[lbl] = action
+
+    data = {'name': lbl, 'color': response['label']['color']}
+    for repo in app.repos - {response['repository']['full_name']}:
+        url = prepare_url('repos/' + repo + '/labels')
+        if action == 'created':
+            app.session.post(url, json=data)
+        elif action == 'edited':
+            try:
+                lbl = response['changes']['name']['from']
+            except KeyError:
+                pass
+            app.session.patch(url + '/' + lbl, json=data)
+        else:
+            app.session.delete(url + '/' + lbl)
+
+    return '', 200
 
 
 @app.template_filter('repo_url')
@@ -384,11 +436,10 @@ def repo_url(repo):
 @click.option('-d', '--debug', is_flag=True, default=False, help='TODO')
 @click.pass_context
 def run_server(ctx, host, port, debug):
-    # TODO: implement the command for starting web app (use app.run)
-    # don't forget to add the session from context to app
+    app.repos = get_config_repos(ctx.obj['config'])
+    setup_session(ctx)
+    app.webhook_secret = get_webhook_secret(ctx.obj['config'])
     app.inject_session(ctx.obj['session'])
-    cfg = ctx.obj['config']
-    app.repos = [r for r in cfg['repos'] if cfg['repos'].getboolean(r)]
     app.run(host=host, port=port, debug=debug)
 
 

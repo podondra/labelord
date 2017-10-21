@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+    <head>
+        <title>Labelord</title>
+    </head>
+    <body>
+        <h1>Labelord</h1>
+        <p>TODO: master-to-master, webhook, GitHub</p>
+	<ul>
+            {% for repo in repos %}
+            <li><a href="{{ repo|repo_url }}">{{ repo }}</a></li>
+            {% endfor %}
+	</ul>
+    </body>
+</html>

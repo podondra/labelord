@@ -1,5 +1,6 @@
 [github]
 token = YOUR_SECRET_TOKEN
+webhook_secret = YOUR_WEBHOOK_SECRET
 
 [labels]
 Bug = FF0000

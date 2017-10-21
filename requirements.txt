@@ -2,10 +2,15 @@ betamax==0.8.0
 certifi==2017.7.27.1
 chardet==3.0.4
 click==6.7
+Flask==0.12.2
 flexmock==0.10.2
 idna==2.6
+itsdangerous==0.24
+Jinja2==2.9.6
+MarkupSafe==1.0
 pkg-resources==0.0.0
 py==1.4.34
 pytest==3.2.3
 requests==2.18.4
 urllib3==1.22
+Werkzeug==0.12.2

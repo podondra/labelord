@@ -1,4 +1,3 @@
-import re
 import sys
 import functools
 import click
@@ -171,6 +170,17 @@ def change_labels(s, repo, new_lbls, mode, dry, out):
     return err
 
 
+def parse_config(path):
+    """Parse the configuration file with ConfigParser.""" 
+    # parse config
+    cfg = configparser.ConfigParser()
+    # make option names case sensitive
+    cfg.optionxform = str
+    # if config file does not exist 'cfg' will be empty
+    cfg.read(path)
+    return cfg
+
+
 @click.group('labelord')
 @click.option('-c', '--config', default='./config.cfg', type=click.Path(),
               help='Configuration file in INI format.')
@@ -186,12 +196,7 @@ def cli(ctx, config, token):
     session = ctx.obj.get('session', requests.Session())
     ctx.obj['session'] = session
 
-    # parse config
-    cfg = configparser.ConfigParser()
-    # make option names case sensitive
-    cfg.optionxform = str
-    # if config file does not exist 'cfg' will be empty
-    cfg.read(config)
+    cfg = parse_config(config)
     ctx.obj['config'] = cfg
     ctx.obj['token'] = token
 
@@ -278,7 +283,6 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
                 code = r.status_code
                 click.echo(m.format(repo, code, r.json()['message'], err=True))
 
-
     if err:
         m = '{} {} error(s) in total, please check log above'
         if out == 'verbose':
@@ -293,58 +297,100 @@ def run(ctx, mode, all_repos, dry_run, verbose, quiet, template_repo):
     elif out == 'semi':
         click.echo(m.format('SUMMARY:', len(repos)))
 
-#####################################################################
-# STARING NEW FLASK SKELETON (Task 2 - flask)
-
 
 class LabelordWeb(flask.Flask):
+    session = requests.Session()
+    repos = list()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # You can do something here, but you don't have to...
-        # Adding more args before *args is also possible
-        # You need to pass import_name to super as first arg or
+        # you can do something here but you don't have to
+        # adding more args before *args is also possible
+        # you need to pass import_name to super as first arg or
         # via keyword (e.g. import_name=__name__)
-        # Be careful not to override something Flask-specific
+        # be careful not to override something Flask-specific
         # @see http://flask.pocoo.org/docs/0.12/api/
         # @see https://github.com/pallets/flask
 
     def inject_session(self, session):
-        # TODO: inject session for communication with GitHub
-        # The tests will call this method to pass the testing session.
-        # Always use session from this call (it will be called before
-        # any HTTP request). If this method is not called, create new
-        # session.
-        ...
+        # inject session for communication with GitHub
+        # the tests will call this method to pass the testing session
+        # always use session from this call (it will be called before
+        # any HTTP request)
+        # if this method is not called, create new session.
+        self.session = session
 
     def reload_config(self):
-        # TODO: check envvar LABELORD_CONFIG and reload the config
-        # Because there are problems with reimporting the app with
+        # TODO merge into functions with CLI part
+        # TODO check envvar LABELORD_CONFIG and reload the config
+        # because there are problems with reimporting the app with
         # different configuration, this method will be called in
-        # order to reload configuration file. Check if everything
-        # is correctly set-up
-        ...
+        # order to reload configuration file
+        # check if everything is correctly set-up
+        path = os.getenv('LABELORD_CONFIG', default='./config.cfg')
+        cfg = parse_config(path)
+
+        try:
+            self.repos = [r for r in cfg['repos'] if cfg['repos'].getboolean(r)]
+        except KeyError:
+            click.echo('No repositories specification has been found', err=True)
+            sys.exit(7)
+
+        try:
+            token = cfg['github']['token']
+        except KeyError:
+            click.echo('No GitHub token has been provided', err=True)
+            sys.exit(3)
+
+        try:
+            webhook_secret = cfg['github']['webhook_secret']
+        except KeyError:
+            click.echo('No webhook secret has been provided', err=True)
+            sys.exit(8)
 
 
-# TODO: instantiate LabelordWeb app
-# Be careful with configs, this is module-wide variable,
-# you want to be able to run CLI app as it was in task 1.
-app = ...
+# instantiate LabelordWeb app
+# be careful with configs this is module-wide variable
+# you want to be able to run CLI app as it was in task 1
+def create_app():
+    """Application factory function."""
+    app = LabelordWeb(__name__)
+    app.reload_config()
+    return app
+
+app = create_app()
 
 # TODO: implement web app
 # hint: you can use flask.current_app (inside app context)
 
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if flask.request.method == 'GET':
+        repos = flask.current_app.repos
+        return flask.render_template('index.html', repos=repos)
+    else:
+        # TODO 204 NO CONTENT
+        return ''
+
+
+@app.template_filter('repo_url')
+def repo_url(repo):
+    return urljoin('https://github.com', repo)
+
 
 @cli.command()
+@click.option('-h', '--host', default='127.0.0.1', help='TODO')
+@click.option('-p', '--port', default=5000, help='TODO')
+@click.option('-d', '--debug', is_flag=True, default=False, help='TODO')
 @click.pass_context
-def run_server(ctx):
+def run_server(ctx, host, port, debug):
     # TODO: implement the command for starting web app (use app.run)
-    # Don't forget to app the session from context to app
-    ...
+    # don't forget to add the session from context to app
+    app.inject_session(ctx.obj['session'])
+    cfg = ctx.obj['config']
+    app.repos = [r for r in cfg['repos'] if cfg['repos'].getboolean(r)]
+    app.run(host=host, port=port, debug=debug)
 
-
-# ENDING  NEW FLASK SKELETON
-#####################################################################
 
 if __name__ == '__main__':
     cli()

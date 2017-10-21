@@ -39,7 +39,7 @@ def get_webhook_secret(cfg):
 
 def get_config_repos(cfg):
     try:
-        repos = {repo for repo in cfg['repos'] if cfg['repos'].getboolean(repo)}
+        repos = {r for r in cfg['repos'] if cfg['repos'].getboolean(r)}
     except KeyError:
         click.echo('No repositories specification has been found', err=True)
         sys.exit(7)
@@ -191,7 +191,7 @@ def change_labels(s, repo, new_lbls, mode, dry, out):
 
 
 def parse_config(path):
-    """Parse the configuration file with ConfigParser.""" 
+    """Parse the configuration file with ConfigParser."""
     # parse config
     cfg = configparser.ConfigParser()
     # make option names case sensitive
@@ -323,7 +323,7 @@ class LabelordWeb(flask.Flask):
     token = None
     webhook_secret = None
     repos = set()
-    ignored = list()
+    ignored_events = list()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -344,7 +344,7 @@ class LabelordWeb(flask.Flask):
         self.session = session
 
     def reload_config(self):
-        # TODO check envvar LABELORD_CONFIG and reload the config
+        # check envvar LABELORD_CONFIG and reload the config
         # because there are problems with reimporting the app with
         # different configuration, this method will be called in
         # order to reload configuration file
@@ -357,10 +357,23 @@ class LabelordWeb(flask.Flask):
         self.session.headers = {'User-Agent': 'Python'}
         self.session.auth = functools.partial(token_auth, token=self.token)
 
-    def verify_signature(self, body, signature):
+    def verify_signature(self, request):
+        body = request.get_data()
+        signature = request.headers.get('X-Hub-Signature', None)
+        if signature is None:
+            return False
         h = hmac.new(self.webhook_secret.encode(), body, hashlib.sha1)
         return hmac.compare_digest(('sha1=' + h.hexdigest()).encode(),
                                    signature.encode())
+
+    def should_ignore_event(self, action, repo, label, color):
+        item = (action, repo, label, color)
+        if action == 'deleted':
+            item = (action, repo, label)
+        if item in self.ignored_events:
+            self.ignored_events.remove(item)
+            return True
+        return False
 
 
 # instantiate LabelordWeb app
@@ -368,68 +381,66 @@ class LabelordWeb(flask.Flask):
 # you want to be able to run CLI app as it was in task 1
 app = LabelordWeb(__name__)
 
-# TODO: implement web app
-# hint: you can use flask.current_app (inside app context)
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    app = flask.current_app
+@app.before_first_request
+def configurate_app():
+    current_app = flask.current_app
     if app.token is None or app.webhook_secret is None:
         app.reload_config()
 
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    current_app = flask.current_app
     request = flask.request
     if request.method == 'GET':
-        repos = app.repos
-        return flask.render_template('index.html', repos=repos)
+        return flask.render_template('index.html', repos=current_app.repos)
 
-    # method is POST
-    # check webhook signature
-    body = request.get_data()
-    signature = request.headers.get('X-Hub-Signature', None)
-    if signature is None or not app.verify_signature(body, signature):
+    # POST method
+    if not current_app.verify_signature(request):
         return '', 401
 
     # check event
-    if request.headers.get('X-GitHub-Event', None) == 'ping':
+    event = request.headers.get('X-GitHub-Event', None)
+    if event == 'ping':
         return '', 200
-    elif request.headers.get('X-GitHub-Event', None) != 'label':
+    elif event != 'label':
         # not allowed event
         return '', 400
 
-    # check repository validity
     response = request.get_json()
-    if response['repository']['full_name'] not in app.repos:
+
+    # check repository validity
+    repo = response['repository']['full_name']
+    if repo not in current_app.repos:
         return '', 400
 
-    action = response['action'] 
-    lbl = response['label']['name']
+    action = response['action']
+    label = response['label']['name']
     color = response['label']['color']
 
-    if action != 'created':
-        if action == 'edited':
-            item = (action, response['repository']['full_name'], lbl, color)
-        elif action == 'deleted':
-            item = (action, response['repository']['full_name'], lbl)
-        if item in app.ignored:
-            app.ignored.remove(item)
-            return '', 200
+    if current_app.should_ignore_event(action, repo, label, color):
+        return '', 200
 
-    data = {'name': lbl, 'color': color}
-    for repo in app.repos - {response['repository']['full_name']}:
-        app.ignored.append((action, repo, lbl, color))
-        url = prepare_url('repos/' + repo + '/labels')
+    data = {'name': label, 'color': color}
+    for r in current_app.repos - {repo}:
+        url = prepare_url('repos/' + r + '/labels')
+
         if action == 'created':
-            app.session.post(url, json=data)
+            current_app.session.post(url, json=data)
+
         elif action == 'edited':
-            app.ignored.append((action, repo, lbl, color))
+            current_app.ignored_events.append((action, r, label, color))
             try:
-                lbl = response['changes']['name']['from']
+                label = response['changes']['name']['from']
             except KeyError:
                 pass
-            app.session.patch(url + '/' + lbl, json=data)
+            current_app.session.patch(url + '/' + label, json=data)
+
         elif action == 'deleted':
-            app.ignored.append((action, repo, lbl))
-            app.session.delete(url + '/' + lbl)
+            current_app.ignored_events.append((action, r, label))
+            current_app.session.delete(url + '/' + label)
+
         else:
             return '', 500
 
@@ -441,10 +452,10 @@ def repo_url(repo):
     return urljoin('https://github.com', repo)
 
 
-@cli.command()
-@click.option('-h', '--host', default='127.0.0.1', help='TODO')
-@click.option('-p', '--port', default=5000, help='TODO')
-@click.option('-d', '--debug', is_flag=True, default=False, help='TODO')
+@cli.command(help='Run server for master-to-master replication.')
+@click.option('-h', '--host', default='127.0.0.1', help='Hostname.')
+@click.option('-p', '--port', default=5000, help='Server port.')
+@click.option('-d', '--debug', is_flag=True, default=False, help='Debug mode.')
 @click.pass_context
 def run_server(ctx, host, port, debug):
     app.repos = get_config_repos(ctx.obj['config'])

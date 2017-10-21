@@ -5,7 +5,8 @@
     </head>
     <body>
         <h1>Labelord</h1>
-        <p>TODO: master-to-master, webhook, GitHub</p>
+        <p>This application allows master-to-master replication of issues'
+        labels using GitHub's webhooks.</p>
 	<ul>
             {% for repo in repos %}
             <li><a href="{{ repo|repo_url }}">{{ repo }}</a></li>

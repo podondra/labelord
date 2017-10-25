@@ -3,7 +3,7 @@
 homework assigment:
 https://github.com/cvut/MI-PYT/blob/master/tutorials/01_requests_click.md
 
-Labelord is command line tool for managing labels on GitHub.
+Labelord is command line and web tool for managing labels on GitHub.
 For usage type `labelord --help` into your command line.
 
 ## configuration file

@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 
 with open('README.md') as f:
@@ -9,21 +9,22 @@ setup(
     version='0.3',
     description='Labelord is tool for managing labels on GitHub.',
     long_description=long_description,
-    license='GNU General Public License v3.0',
-    url='https://github.com/podondra/mi-pyt-labelord',
-    packages=['labelord'],
-    package_data={'labelord': ['templates/*.html']},
-    keywords='github,labels',
-    install_requires=['click>=6.7', 'requests>=2.18.4', 'Flask>=0.12.2'],
-    # TODO dev requires
-    # TODO test requires
-    entry_points={
-        'console_scripts': [
-            'labelord = labelord.labelord:cli',
-            ],
-        },
     author='Ondřej Podsztavek',
     author_email='ondrej.podsztavek@gmail.com',
+    license='GNU General Public License v3.0',
+    url='https://github.com/podondra/mi-pyt-labelord',
+    packages=find_packages(),
+    include_package_data=True,
+    keywords='github,labels',
+    install_requires=['click>=6', 'requests>=2.18', 'Flask>=0.12'],
+    # TODO dev requires
+    # TODO test requires
+    # http://click.pocoo.org/5/setuptools/
+    entry_points={
+        'console_scripts': [
+            'labelord = labelord.cli:cli',
+            ],
+        },
     classifiers=[
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3',

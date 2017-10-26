@@ -15,10 +15,8 @@ setup(
     url='https://github.com/podondra/mi-pyt-labelord',
     packages=find_packages(),
     package_data={'labelord': ['templates/*.html']},
-    keywords='github,labels',
+    keywords='github,labels,cli,mi-pyt',
     install_requires=['click>=6', 'requests>=2.18', 'Flask>=0.12'],
-    # TODO dev requires
-    # TODO test requires
     # http://click.pocoo.org/5/setuptools/
     entry_points={
         'console_scripts': [

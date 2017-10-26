@@ -7,9 +7,15 @@ flexmock==0.10.2
 idna==2.6
 itsdangerous==0.24
 Jinja2==2.9.6
+labelord-podszond==0.3
 MarkupSafe==1.0
+pkg-resources==0.0.0
+pkginfo==1.4.1
 py==1.4.34
 pytest==3.2.3
 requests==2.18.4
+requests-toolbelt==0.8.0
+tqdm==4.19.4
+twine==1.9.1
 urllib3==1.22
 Werkzeug==0.12.2

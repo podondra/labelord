@@ -14,7 +14,7 @@ setup(
     license='GNU General Public License v3.0',
     url='https://github.com/podondra/mi-pyt-labelord',
     packages=find_packages(),
-    include_package_data=True,
+    package_data={'labelord': ['templates/*.html']},
     keywords='github,labels',
     install_requires=['click>=6', 'requests>=2.18', 'Flask>=0.12'],
     # TODO dev requires

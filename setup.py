@@ -5,7 +5,7 @@ with open('README.md') as f:
     long_description = ''.join(f.readlines())
 
 setup(
-    name='labelord_podondra',
+    name='labelord_podszond',
     version='0.3',
     description='Labelord is tool for managing labels on GitHub.',
     long_description=long_description,

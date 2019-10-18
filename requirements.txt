@@ -17,4 +17,4 @@ requests-toolbelt==0.8.0
 tqdm==4.19.4
 twine==1.9.1
 urllib3==1.22
-Werkzeug==0.12.2
+Werkzeug==0.15.3
